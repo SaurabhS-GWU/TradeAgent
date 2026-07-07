@@ -4,10 +4,12 @@ Wires together configuration, logging, and (in future phases) domain
 services. ``main.py`` delegates here so the entry point stays thin.
 """
 
+import asyncio
 import logging
 
 from trading_agent.config import Settings, load_settings
 from trading_agent.infrastructure.logging import setup_logging
+from trading_agent.market import create_market_data_client
 
 logger = logging.getLogger(__name__)
 
@@ -33,4 +35,16 @@ class Application:
             self._settings.log_level,
         )
 
-        logger.info("Application bootstrap complete. Domain modules not yet wired.")
+        try:
+            asyncio.run(self._run_market_data())
+        except KeyboardInterrupt:
+            logger.info("Shutdown requested by user")
+
+    async def _run_market_data(self) -> None:
+        """Start the live market data client."""
+        client = create_market_data_client()
+
+        try:
+            await client.start()
+        finally:
+            await client.stop()
