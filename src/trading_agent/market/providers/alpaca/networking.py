@@ -33,7 +33,11 @@ def build_websocket_params() -> dict[str, ssl.SSLContext]:
 
 
 class AlpacaLiveStream(StockDataStream):
-    """Alpaca stock stream that reports connection lifecycle events."""
+    """Alpaca stock stream that reports connection lifecycle events.
+
+    Reconnect handling lives here at the websocket layer. The provider wraps
+    this stream with an additional outer retry loop for unexpected exits.
+    """
 
     def __init__(
         self,
@@ -95,48 +99,49 @@ class AlpacaLiveStream(StockDataStream):
                     self._running = True
                 await self._consume()
             except websockets.WebSocketException as exc:
-                await self.close()
-                self._running = False
-                self._on_status(ConnectionStatus.RECONNECTING, str(exc))
-                logger.warning(
-                    "Alpaca websocket error, reconnecting in %.1fs: %s",
-                    _RECONNECT_DELAY_SECONDS,
-                    exc,
-                )
-                await asyncio.sleep(_RECONNECT_DELAY_SECONDS)
+                await self._reconnect_after_error("websocket", exc)
             except ssl.SSLError as exc:
-                await self.close()
-                self._running = False
-                self._on_status(ConnectionStatus.RECONNECTING, str(exc))
-                logger.warning(
-                    "Alpaca SSL error, reconnecting in %.1fs: %s",
-                    _RECONNECT_DELAY_SECONDS,
-                    exc,
-                )
-                await asyncio.sleep(_RECONNECT_DELAY_SECONDS)
+                await self._reconnect_after_error("SSL", exc)
             except ValueError as exc:
                 if "insufficient subscription" in str(exc):
-                    await self.close()
-                    self._running = False
-                    self._on_status(ConnectionStatus.ERROR, str(exc))
-                    logger.exception("Alpaca subscription error: %s", exc)
+                    await self._handle_fatal_subscription_error(exc)
                     return
-                await self.close()
-                self._running = False
-                self._on_status(ConnectionStatus.RECONNECTING, str(exc))
-                logger.warning(
-                    "Alpaca connection error, reconnecting in %.1fs: %s",
-                    _RECONNECT_DELAY_SECONDS,
-                    exc,
-                )
-                await asyncio.sleep(_RECONNECT_DELAY_SECONDS)
+                await self._reconnect_after_error("connection", exc)
             except Exception as exc:
-                await self.close()
-                self._running = False
-                self._on_status(ConnectionStatus.RECONNECTING, str(exc))
-                logger.exception(
-                    "Alpaca stream error, reconnecting in %.1fs: %s",
-                    _RECONNECT_DELAY_SECONDS,
-                    exc,
-                )
-                await asyncio.sleep(_RECONNECT_DELAY_SECONDS)
+                await self._reconnect_after_error("stream", exc, log_exception=True)
+
+    async def _reconnect_after_error(
+        self,
+        error_kind: str,
+        exc: Exception,
+        *,
+        log_exception: bool = False,
+    ) -> None:
+        """Close the stream and schedule a websocket-layer reconnect."""
+        await self.close()
+        self._running = False
+        self._on_status(ConnectionStatus.RECONNECTING, str(exc))
+
+        if log_exception:
+            logger.exception(
+                "Alpaca %s error, reconnecting in %.1fs: %s",
+                error_kind,
+                _RECONNECT_DELAY_SECONDS,
+                exc,
+            )
+        else:
+            logger.warning(
+                "Alpaca %s error, reconnecting in %.1fs: %s",
+                error_kind,
+                _RECONNECT_DELAY_SECONDS,
+                exc,
+            )
+
+        await asyncio.sleep(_RECONNECT_DELAY_SECONDS)
+
+    async def _handle_fatal_subscription_error(self, exc: ValueError) -> None:
+        """Stop the stream when Alpaca rejects the requested subscription."""
+        await self.close()
+        self._running = False
+        self._on_status(ConnectionStatus.ERROR, str(exc))
+        logger.exception("Alpaca subscription error: %s", exc)

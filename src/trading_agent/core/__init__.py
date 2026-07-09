@@ -1,1 +1,13 @@
-"""Shared domain types, constants, and exceptions used across modules."""
+"""Shared types, enums, and exceptions used across domain modules."""
+
+from trading_agent.core.exceptions import (
+    ConfigurationError,
+    MarketDataError,
+    TradingAgentError,
+)
+
+__all__ = [
+    "ConfigurationError",
+    "MarketDataError",
+    "TradingAgentError",
+]

@@ -13,6 +13,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from trading_agent.core.exceptions import ConfigurationError
+
 logger = logging.getLogger(__name__)
 
 _VALID_LOG_LEVELS = frozenset(
@@ -43,7 +45,7 @@ def _parse_environment(raw: str) -> Environment:
         return Environment(normalized)
     except ValueError as exc:
         valid = ", ".join(env.value for env in Environment)
-        raise ValueError(
+        raise ConfigurationError(
             f"Invalid APP_ENV '{raw}'. Expected one of: {valid}."
         ) from exc
 
@@ -52,7 +54,7 @@ def _parse_log_level(raw: str) -> str:
     normalized = raw.strip().upper()
     if normalized not in _VALID_LOG_LEVELS:
         valid = ", ".join(sorted(_VALID_LOG_LEVELS))
-        raise ValueError(
+        raise ConfigurationError(
             f"Invalid LOG_LEVEL '{raw}'. Expected one of: {valid}."
         )
     return normalized
@@ -67,12 +69,15 @@ def load_settings(env_file: Path | None = None) -> Settings:
 
     Returns:
         Validated, immutable ``Settings`` instance.
+
+    Raises:
+        ConfigurationError: If required values are missing or invalid.
     """
     load_dotenv(dotenv_path=env_file)
 
     app_name = os.getenv("APP_NAME", "TradingAgent").strip()
     if not app_name:
-        raise ValueError("APP_NAME must not be empty.")
+        raise ConfigurationError("APP_NAME must not be empty.")
 
     environment = _parse_environment(os.getenv("APP_ENV", "development"))
     log_level = _parse_log_level(os.getenv("LOG_LEVEL", "INFO"))

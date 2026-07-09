@@ -30,6 +30,7 @@ class AlpacaMarketDataProvider:
         self._running = False
         self._on_update: UpdateHandler | None = None
         self._on_status: StatusHandler | None = None
+        self._status_tasks: set[asyncio.Task[None]] = set()
 
     async def start(
         self,
@@ -48,6 +49,7 @@ class AlpacaMarketDataProvider:
             self._register_handlers()
 
             try:
+                # Alpaca SDK exposes this lifecycle loop on StockDataStream.
                 await self._stream._run_forever()
                 break
             except asyncio.CancelledError:
@@ -57,7 +59,10 @@ class AlpacaMarketDataProvider:
                 if not self._running:
                     break
                 await on_status(ConnectionStatus.RECONNECTING, str(exc))
-                logger.exception("Alpaca market data stream failed; retrying")
+                logger.exception(
+                    "Alpaca market data stream failed; retrying in %.1fs",
+                    reconnect_delay_seconds,
+                )
                 await asyncio.sleep(reconnect_delay_seconds)
                 reconnect_delay_seconds = min(
                     reconnect_delay_seconds * 2,
@@ -67,10 +72,13 @@ class AlpacaMarketDataProvider:
                 self._stream = None
 
     async def stop(self) -> None:
-        """Stop the Alpaca stream."""
+        """Stop the Alpaca stream and cancel pending status callbacks."""
         self._running = False
+
         if self._stream is not None:
             await self._stream.stop_ws()
+
+        await self._drain_status_tasks()
 
     def _create_stream(self) -> AlpacaLiveStream:
         feed = DataFeed.IEX if self._settings.feed == "IEX" else DataFeed.SIP
@@ -78,7 +86,11 @@ class AlpacaMarketDataProvider:
         def emit_status(status: ConnectionStatus, detail: str | None) -> None:
             if self._on_status is None:
                 return
-            asyncio.create_task(self._on_status(status, detail))
+
+            task = asyncio.create_task(self._on_status(status, detail))
+            self._status_tasks.add(task)
+            task.add_done_callback(self._log_status_task_result)
+            task.add_done_callback(self._status_tasks.discard)
 
         return AlpacaLiveStream(
             api_key=self._settings.api_key,
@@ -100,3 +112,22 @@ class AlpacaMarketDataProvider:
 
         self._stream.subscribe_trades(trade_handler, *self._settings.symbols)
         self._stream.subscribe_quotes(quote_handler, *self._settings.symbols)
+
+    @staticmethod
+    def _log_status_task_result(task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Status callback failed", exc_info=exc)
+
+    async def _drain_status_tasks(self) -> None:
+        if not self._status_tasks:
+            return
+
+        pending = list(self._status_tasks)
+        for task in pending:
+            task.cancel()
+
+        await asyncio.gather(*pending, return_exceptions=True)
+        self._status_tasks.clear()

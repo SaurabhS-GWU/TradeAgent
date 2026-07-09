@@ -5,6 +5,7 @@ import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 
+from trading_agent.core.exceptions import ConfigurationError
 from trading_agent.market.models import ConnectionStatus, MarketUpdate
 from trading_agent.market.protocols import MarketDataProvider
 from trading_agent.market.providers.alpaca.config import load_alpaca_settings
@@ -22,6 +23,7 @@ class MarketDataClient:
         self._provider = provider
         self._updates: asyncio.Queue[MarketUpdate | None] = asyncio.Queue()
         self._consumers: list[UpdateConsumer] = []
+        self._stopped = False
 
     def add_consumer(self, consumer: UpdateConsumer) -> None:
         """Register a callback invoked for every market update."""
@@ -42,18 +44,28 @@ class MarketDataClient:
 
     async def stop(self) -> None:
         """Stop streaming and close the provider connection."""
+        if self._stopped:
+            return
+
+        self._stopped = True
         logger.info("Stopping market data client")
         await self._provider.stop()
         await self._updates.put(None)
 
     async def _handle_update(self, update: MarketUpdate) -> None:
-        logger.info("Market update received | %s", update)
+        logger.debug("Market update received | %s", update)
         await self._updates.put(update)
 
         for consumer in self._consumers:
-            result = consumer(update)
-            if asyncio.iscoroutine(result):
-                await result
+            try:
+                result = consumer(update)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.exception(
+                    "Market update consumer failed for %s update",
+                    update.update_type.value,
+                )
 
     async def _handle_status(
         self,
@@ -73,7 +85,7 @@ def create_market_data_client() -> MarketDataClient:
     if provider_name == "alpaca":
         provider: MarketDataProvider = AlpacaMarketDataProvider(load_alpaca_settings())
     else:
-        raise ValueError(
+        raise ConfigurationError(
             f"Unsupported MARKET_DATA_PROVIDER '{provider_name}'. "
             "Supported providers: alpaca."
         )

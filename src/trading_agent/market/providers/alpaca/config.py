@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from trading_agent.core.exceptions import ConfigurationError
+
 logger = logging.getLogger(__name__)
 
 _VALID_FEEDS = frozenset({"IEX", "SIP"})
@@ -24,7 +26,7 @@ class AlpacaSettings:
 def _require_env(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
-        raise ValueError(f"{name} must be set in the environment.")
+        raise ConfigurationError(f"{name} must be set in the environment.")
     return value
 
 
@@ -32,7 +34,7 @@ def _parse_feed(raw: str) -> str:
     normalized = raw.strip().upper()
     if normalized not in _VALID_FEEDS:
         valid = ", ".join(sorted(_VALID_FEEDS))
-        raise ValueError(
+        raise ConfigurationError(
             f"Invalid ALPACA_DATA_FEED '{raw}'. Expected one of: {valid}."
         )
     return normalized
@@ -45,12 +47,18 @@ def _parse_symbols(raw: str) -> tuple[str, ...]:
         if symbol.strip()
     )
     if not symbols:
-        raise ValueError("MARKET_DATA_SYMBOLS must contain at least one symbol.")
+        raise ConfigurationError(
+            "MARKET_DATA_SYMBOLS must contain at least one symbol."
+        )
     return symbols
 
 
 def load_alpaca_settings() -> AlpacaSettings:
-    """Load Alpaca settings from environment variables."""
+    """Load Alpaca settings from environment variables.
+
+    Raises:
+        ConfigurationError: If required values are missing or invalid.
+    """
     load_dotenv()
 
     settings = AlpacaSettings(
@@ -60,5 +68,9 @@ def load_alpaca_settings() -> AlpacaSettings:
         symbols=_parse_symbols(os.getenv("MARKET_DATA_SYMBOLS", "SPY")),
     )
 
-    logger.debug("Loaded Alpaca settings for symbols=%s feed=%s", settings.symbols, settings.feed)
+    logger.debug(
+        "Loaded Alpaca settings for symbols=%s feed=%s",
+        settings.symbols,
+        settings.feed,
+    )
     return settings

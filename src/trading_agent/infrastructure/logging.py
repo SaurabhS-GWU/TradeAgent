@@ -7,7 +7,7 @@ All modules should use ``logging.getLogger(__name__)`` after
 import logging
 import sys
 
-from trading_agent.config.settings import Settings
+from trading_agent.config.settings import Environment, Settings
 
 
 def setup_logging(settings: Settings) -> None:
@@ -32,3 +32,7 @@ def setup_logging(settings: Settings) -> None:
     root_logger.setLevel(log_level)
 
     logging.getLogger("trading_agent").setLevel(log_level)
+
+    if settings.environment is Environment.PRODUCTION:
+        logging.getLogger("websockets").setLevel(logging.WARNING)
+        logging.getLogger("alpaca").setLevel(logging.WARNING)
